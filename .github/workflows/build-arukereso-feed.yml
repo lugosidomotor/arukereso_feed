@@ -1,6 +1,9 @@
 name: Build Árukereső feed
 
 on:
+  schedule:
+    # napi 2x: 04:00 és 16:00 UTC
+    - cron: "0 4,16 * * *"
   workflow_dispatch: {}
 
 permissions:
