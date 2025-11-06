@@ -1,0 +1,89 @@
+name: Build Árukereső feed
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-feed:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_URL: "https://artpresident.hu/wp-content/uploads/woo-product-feed-pro/xml/AdVpZenPL5fxCKWoqd0N65WyCSSRZ2Kd.xml"
+      VAT_FACTOR: "1.27"
+      OUTPUT_FILE: "arukereso_feed.xml"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Download source XML
+        run: |
+          curl -fsSL "$SOURCE_URL" -o source.xml
+
+      - name: Transform net_price values (divide by 1.27 and round to integer)
+        shell: bash
+        run: |
+          cat > transform.py << 'PY'
+          import xml.etree.ElementTree as ET
+          import decimal
+
+          src_path = "source.xml"
+          out_path = "arukereso_feed.xml"
+          factor = decimal.Decimal("${{ env.VAT_FACTOR }}")
+
+          # Use ROUND_HALF_UP for standard commercial rounding
+          decimal.getcontext().rounding = decimal.ROUND_HALF_UP
+
+          parser = ET.XMLParser(encoding="utf-8")
+          tree = ET.parse(src_path, parser=parser)
+          root = tree.getroot()
+
+          def to_decimal(s: str):
+              try:
+                  return decimal.Decimal(s.strip().replace(",", "."))
+              except Exception:
+                  return None
+
+          changed = False
+          for elem in root.iter():
+              if elem.tag.endswith("net_price") and elem.text:
+                  val = to_decimal(elem.text)
+                  if val is None:
+                      continue
+                  new_val = (val / factor).quantize(decimal.Decimal("1"))  # round to integer
+                  text_out = f"{new_val}"  # no decimals
+                  if text_out != elem.text.strip():
+                      elem.text = text_out
+                      changed = True
+
+          tree.write(out_path, encoding="utf-8", xml_declaration=True)
+          PY
+
+          python3 transform.py
+
+      - name: Configure git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit changes if any
+        run: |
+          if [ -f "${OUTPUT_FILE}" ]; then
+            git add "${OUTPUT_FILE}"
+            if ! git diff --cached --quiet; then
+              git commit -m "Update ${OUTPUT_FILE}: net_price ÷ 1.27 (rounded to integer)"
+              git push
+              echo "Changes pushed."
+            else
+              echo "No changes to commit."
+            fi
+          else
+            echo "Output file not found: ${OUTPUT_FILE}" >&2
+            exit 1
+          fi
